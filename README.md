@@ -10,6 +10,10 @@ Copy `please.fish` to your fish functions path:
 cp please.fish ~/.config/fish/functions/please.fish
 ```
 
+## Example
+
+https://github.com/user-attachments/assets/b6a63acd-d05a-4d68-9446-82e59da6caca
+
 ## Usage
 
 ```fish
