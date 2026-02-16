@@ -1,6 +1,6 @@
 # fish-please
 
-Fish function to ask Codex for a shell command, show a short explanation, and confirm before running.
+Fish function to ask Codex for a shell command, show a short explanation, optionally request a deeper explanation, and confirm before running.
 
 ## Install
 
@@ -21,3 +21,8 @@ please <request...>
 please --dry-run <request...>
 please --help
 ```
+
+When prompted, choose:
+- `Y` (or Enter): run the command (default)
+- `n`: skip
+- `e`: ask for a more detailed explanation

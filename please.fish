@@ -9,7 +9,7 @@ function please --description 'Generate and optionally run a shell command via C
     if set -q _flag_help
         printf "%s\n" \
             "Usage: please [OPTIONS] <request...>" \
-            "Generate one shell command with Codex, show a short why, then ask before running." \
+            "Generate one shell command with Codex, show a short why, then ask before running (default: yes)." \
             "" \
             "Options:" \
             "  -m, --model MODEL  Codex model to use (optional)" \
@@ -18,7 +18,9 @@ function please --description 'Generate and optionally run a shell command via C
             "" \
             "Examples:" \
             "  please find all .log files bigger than 50MB" \
-            "  please --dry-run show disk usage by top 10 folders"
+            "  please --dry-run show disk usage by top 10 folders" \
+            "" \
+            "Run prompt choices: [Y/n/e=explain]"
         return 0
     end
 
@@ -97,13 +99,54 @@ function please --description 'Generate and optionally run a shell command via C
         return 0
     end
 
-    read --local --prompt-str "Run this command? [y/N] " confirm
-    switch (string lower -- "$confirm")
-        case y yes
-            eval "$command_line"
-            return $status
-        case '*'
-            printf "%s\n" "Skipped."
-            return 0
+    while true
+        read --local --prompt-str "Run this command? [Y/n/e=explain] " confirm
+        switch (string lower -- (string trim -- "$confirm"))
+            case '' y yes
+                eval "$command_line"
+                return $status
+            case e explain
+                set -l explain_prompt (string join "\n" \
+                    "Explain this fish command in detail for the original request." \
+                    "Return plain text only, max 8 lines." \
+                    "Request: $user_request" \
+                    "Command: $command_line")
+
+                set -l explain_out_file (mktemp -t please.codex.explain.out.XXXXXX)
+                or begin
+                    echo "please: failed to create temporary output file" >&2
+                    return 1
+                end
+                set -l explain_err_file (mktemp -t please.codex.explain.err.XXXXXX)
+                or begin
+                    command rm -f "$explain_out_file"
+                    echo "please: failed to create temporary error file" >&2
+                    return 1
+                end
+
+                set -l explain_codex_args exec --skip-git-repo-check --color never -o "$explain_out_file"
+                if set -q _flag_model
+                    set -a explain_codex_args --model "$_flag_model"
+                end
+
+                codex $explain_codex_args -- "$explain_prompt" >/dev/null 2>"$explain_err_file"
+                set -l explain_status $status
+                if test $explain_status -ne 0
+                    echo "please: codex failed to explain command" >&2
+                    if test -s "$explain_err_file"
+                        cat "$explain_err_file" >&2
+                    end
+                    command rm -f "$explain_out_file" "$explain_err_file"
+                    return 1
+                end
+
+                printf "\n%s\n%s\n\n" "Detailed explanation:" (string trim -- (cat "$explain_out_file"))
+                command rm -f "$explain_out_file" "$explain_err_file"
+            case n no
+                printf "%s\n" "Skipped."
+                return 0
+            case '*'
+                printf "%s\n" "Please enter Y, n, or e."
+        end
     end
 end
