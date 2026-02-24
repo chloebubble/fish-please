@@ -37,6 +37,8 @@ function please --description 'Generate and optionally run a shell command via C
     set -l user_request (string join ' ' -- $argv)
     set -l codex_prompt (string join "\n" \
         "Generate exactly one fish-compatible shell command for this request." \
+        "Execution shell is fish; this command will be run with fish eval." \
+        "Use fish-specific builtins or syntax when they are the best fit." \
         "Return exactly two lines and nothing else:" \
         "COMMAND: <single shell command>" \
         "WHY: <brief explanation, max 120 chars>" \
