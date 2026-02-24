@@ -2,6 +2,8 @@
 
 Fish function to ask Codex for a shell command, show a short explanation, optionally request a deeper explanation, and confirm before running.
 
+Commands are generated specifically for fish and may use fish builtins/syntax when appropriate.
+
 ## Install
 
 Copy `please.fish` to your fish functions path:
@@ -21,6 +23,8 @@ please <request...>
 please --dry-run <request...>
 please --help
 ```
+
+Generated commands are executed in fish via `eval`.
 
 When prompted, choose:
 - `Y` (or Enter): run the command (default)
