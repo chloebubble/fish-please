@@ -25,6 +25,7 @@ please --help
 ```
 
 Generated commands are executed in fish via `eval`.
+When you choose to run one, `please` also appends that exact command to your fish history and saves it immediately.
 
 When prompted, choose:
 - `Y` (or Enter): run the command (default)

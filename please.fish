@@ -105,6 +105,8 @@ function please --description 'Generate and optionally run a shell command via C
         read --local --prompt-str "Run this command? [Y/n/e=explain] " confirm
         switch (string lower -- (string trim -- "$confirm"))
             case '' y yes
+                history append -- "$command_line"
+                history save
                 eval "$command_line"
                 return $status
             case e explain
