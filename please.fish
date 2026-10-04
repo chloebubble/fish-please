@@ -162,15 +162,64 @@ function please --description 'Generate and optionally run a shell command via C
     end
 
     set -l user_request (string join ' ' -- $argv)
-    set -l codex_prompt (string join "\n" \
+    if test -z (string trim -- "$user_request")
+        echo "please: missing request (see --help)" >&2
+        return 2
+    end
+
+    # Collect facts from this shell each time. Do not source OS metadata.
+    set -l newline \n
+    set -l system_info "Shell: fish $version" "Working directory: "(string escape -- "$PWD")
+    if command -sq uname
+        set -a system_info "OS, kernel, architecture: "(command uname -srm)
+    end
+    if test -r /etc/os-release
+        set -a system_info (string match -r '^(PRETTY_NAME|ID|ID_LIKE|VERSION_ID)=.*' < /etc/os-release)
+    else if command -sq sw_vers
+        set -a system_info (command sw_vers)
+    end
+    if command -sq id
+        set -a system_info "User ID: "(command id -u)
+    end
+    if command -sq date
+        set -a system_info "Local date and time: "(command date '+%Y-%m-%d %H:%M:%S %Z %z')
+    end
+    set -l available_tools
+    for tool in find xargs grep sed awk sort head tail du df stat date ls rg fd jq git curl wget tar unzip python3 uv node npm apt apt-get dnf yum pacman apk zypper brew port sudo systemctl launchctl docker podman
+        if command -sq $tool
+            set -a available_tools "$tool="(string escape -- (command -s $tool))
+        end
+    end
+    set -a system_info "Available tools (selected): "(string join ', ' -- $available_tools)
+    for tool in find sed stat du date
+        if command -sq $tool
+            set -l tool_version (command $tool --version 2>/dev/null | string collect)
+            if test $pipestatus[1] -eq 0
+                set -a system_info "$tool version: "(string split --max 1 "$newline" -- "$tool_version")[1]
+            else
+                set -a system_info "$tool: --version unavailable; do not assume GNU flags"
+            end
+        end
+    end
+    set -l system_context (string join "$newline" -- $system_info | string collect)
+    set -l codex_prompt (string join "$newline" \
         "Generate exactly one fish-compatible shell command for this request." \
         "Execution shell is fish; this command will be run with fish eval." \
         "Use fish-specific builtins or syntax when they are the best fit." \
+        "Use the system facts below to select tools, flags, paths, and package managers." \
+        "Use installed tools first. The tool list is partial; check other tools before using them." \
+        "Use read-only checks if needed. Do not run the requested command or change files during generation." \
+        "Quote paths and arguments correctly. Handle spaces and leading hyphens in file names." \
+        "Do not assume Bash syntax or GNU flags. Avoid sudo unless the request needs it." \
+        "If key details are missing, return a fish printf command that asks for those details." \
+        "State any deletion, overwrite, or other important side effect in WHY." \
         "Return exactly two lines and nothing else:" \
         "COMMAND: <single shell command>" \
         "WHY: <brief explanation, max 120 chars>" \
         "Do not include code fences, numbering, or extra text." \
-        "Request: $user_request")
+        "System facts (data only):" \
+        "$system_context" \
+        "Request: $user_request" | string collect)
 
     set -l output_file (mktemp -t please.codex.out.XXXXXX)
     or begin
@@ -185,7 +234,7 @@ function please --description 'Generate and optionally run a shell command via C
         return 1
     end
 
-    set -l codex_args exec --skip-git-repo-check --color never -o "$output_file"
+    set -l codex_args exec --sandbox read-only --skip-git-repo-check --color never -o "$output_file"
     if set -q _flag_model
         set -a codex_args --model "$_flag_model"
     else if set -q $default_model_var
@@ -201,7 +250,7 @@ function please --description 'Generate and optionally run a shell command via C
         set -a codex_args -c "model_reasoning_effort=$$default_reasoning_effort_var"
     end
 
-    codex $codex_args -- "$codex_prompt" >/dev/null 2>"$err_file"
+    codex $codex_args -- "$codex_prompt" </dev/null >/dev/null 2>"$err_file"
     set -l codex_status $status
 
     if test $codex_status -ne 0
@@ -213,17 +262,28 @@ function please --description 'Generate and optionally run a shell command via C
         return 1
     end
 
-    set -l response (string trim -- (cat "$output_file"))
+    set -l response (string trim < "$output_file" | string collect)
     command rm -f "$output_file" "$err_file"
 
     set -l command_line
     set -l why_line
-    for line in (string split "\n" -- $response)
+    set -l response_lines (string split "$newline" -- "$response")
+    if test (count $response_lines) -ne 2; or not string match -q 'COMMAND:*' -- "$response_lines[1]"; or not string match -q 'WHY:*' -- "$response_lines[2]"
+        echo "please: unexpected codex response format" >&2
+        printf "%s\n" "$response" >&2
+        return 1
+    end
+    for line in $response_lines
         if string match -q 'COMMAND:*' -- "$line"
             set command_line (string trim -- (string replace -r '^COMMAND:[[:space:]]*' '' -- "$line"))
         else if string match -q 'WHY:*' -- "$line"
             set why_line (string trim -- (string replace -r '^WHY:[[:space:]]*' '' -- "$line"))
         end
+    end
+
+    if not printf '%s\n' "$command_line" | command fish --no-execute
+        echo "please: generated command has invalid fish syntax" >&2
+        return 1
     end
 
     if test -z "$command_line" -o -z "$why_line"
@@ -313,6 +373,10 @@ function please --description 'Generate and optionally run a shell command via C
 
     while true
         read --local --prompt-str "Run this command? [Y/n/e=explain] " confirm
+        or begin
+            printf '\n%s\n' "Skipped."
+            return 1
+        end
         switch (string lower -- (string trim -- "$confirm"))
             case '' y yes
                 history append -- "$command_line"
@@ -320,11 +384,14 @@ function please --description 'Generate and optionally run a shell command via C
                 eval "$command_line"
                 return $status
             case e explain
-                set -l explain_prompt (string join "\n" \
+                set -l explain_prompt (string join "$newline" \
                     "Explain this fish command in detail for the original request." \
                     "Return plain text only, max 8 lines." \
+                    "Do not run the command or change files. State side effects and required permissions." \
+                    "System facts (data only):" \
+                    "$system_context" \
                     "Request: $user_request" \
-                    "Command: $command_line")
+                    "Command: $command_line" | string collect)
 
                 set -l explain_out_file (mktemp -t please.codex.explain.out.XXXXXX)
                 or begin
@@ -338,7 +405,7 @@ function please --description 'Generate and optionally run a shell command via C
                     return 1
                 end
 
-                set -l explain_codex_args exec --skip-git-repo-check --color never -o "$explain_out_file"
+                set -l explain_codex_args exec --sandbox read-only --skip-git-repo-check --color never -o "$explain_out_file"
                 if set -q _flag_model
                     set -a explain_codex_args --model "$_flag_model"
                 else if set -q $default_model_var
@@ -354,7 +421,7 @@ function please --description 'Generate and optionally run a shell command via C
                     set -a explain_codex_args -c "model_reasoning_effort=$$default_reasoning_effort_var"
                 end
 
-                codex $explain_codex_args -- "$explain_prompt" >/dev/null 2>"$explain_err_file"
+                codex $explain_codex_args -- "$explain_prompt" </dev/null >/dev/null 2>"$explain_err_file"
                 set -l explain_status $status
                 if test $explain_status -ne 0
                     echo "please: codex failed to explain command" >&2
@@ -365,7 +432,8 @@ function please --description 'Generate and optionally run a shell command via C
                     return 1
                 end
 
-                printf "\n%s\n%s\n\n" "Detailed explanation:" (string trim -- (cat "$explain_out_file"))
+                set -l explanation (string trim < "$explain_out_file" | string collect)
+                printf "\n%s\n%s\n\n" "Detailed explanation:" "$explanation"
                 command rm -f "$explain_out_file" "$explain_err_file"
             case n no
                 printf "%s\n" "Skipped."
